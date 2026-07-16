@@ -1405,7 +1405,7 @@ def build_bundle_index(
     lines = [
         "# Email Bundle Index",
         "",
-        "This folder contains one converted email and its visible attachments.",
+        "This index lists one converted email, any converted embedded emails, and visible attachments.",
         "",
         "## Read Order",
         "",
