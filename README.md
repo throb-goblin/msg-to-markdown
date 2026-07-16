@@ -281,3 +281,7 @@ MarkItDown is isolated in `MarkItDownEmailBackend` inside `converter.py`.
 Replacing it with another `.msg` parser, such as `extract-msg`, should only
 require implementing the same `convert(source_path) -> tuple[str, str | None]`
 method and injecting that backend into `MsgToMarkdownConverter`.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
