@@ -1,4 +1,8 @@
-# MSG to Markdown
+<div align="center">
+  <img src="icon_light.png" alt="MSG to Markdown icon" width="96" height="96">
+  <h1>MSG to Markdown</h1>
+  <p><strong>Convert Outlook MSG files into clean Markdown and AI-friendly attachment bundles.</strong></p>
+</div>
 
 MSG to Markdown is a Windows desktop utility for converting Microsoft Outlook
 `.msg` files into UTF-8 Markdown using Microsoft's `markitdown` package. It can
