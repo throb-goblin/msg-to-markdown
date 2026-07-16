@@ -258,17 +258,6 @@ folder events and batch summary totals.
 
 Both `config.json` and `logs/` are ignored by Git.
 
-## Data Safety
-
-This project intentionally does not include sample `.msg` files, converted
-Markdown, extracted attachments, logs, local configuration, virtual
-environments, or generated launcher binaries. Keep real email archives and
-converted outputs outside version control.
-
-The `.gitignore` blocks common email/archive outputs, including `.msg`, `.eml`,
-PDF, DOCX, XLSX, CSV and generated output folders, to reduce the chance of
-publishing private material by accident.
-
 ## Rebuilding The Launcher
 
 The optional `MSG to Markdown.exe` launcher is generated from
