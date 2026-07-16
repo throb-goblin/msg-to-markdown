@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local app state
+config.json
+logs/
+input_folder/
+output_folder/
+
+# Private email archives and generated conversion outputs
+*.msg
+*.eml
+*.ost
+*.pst
+*_attachments/
+README_index.md
+main_email.md
+
+# Extracted or converted attachment/document data
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.xlsm
+*.csv
+*.tsv
+*.rtf
+*.txt
+!requirements.txt
+*.jpeg
+*.jpg
+*.gif
+*.bmp
+*.tif
+*.tiff
+
+# Generated binaries and build outputs
+*.exe
+*.dll
+*.pdb
+*.msi
+build/
+dist/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

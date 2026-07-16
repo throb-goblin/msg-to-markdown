@@ -1,0 +1,17 @@
+{
+  "app_mode": "convert",
+  "auto_start_watching": false,
+  "details_expanded": false,
+  "enable_desktop_notifications": false,
+  "existing_file_action": "skip",
+  "input_folder": "input_folder",
+  "minimize_to_tray": true,
+  "open_output_when_finished": true,
+  "output_folder": "output_folder",
+  "overwrite_existing": false,
+  "process_subfolders": true,
+  "run_watcher_at_login": false,
+  "skip_already_converted": true,
+  "theme": "system",
+  "window_geometry": "1120x780"
+}
