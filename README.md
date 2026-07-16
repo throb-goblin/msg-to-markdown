@@ -80,7 +80,7 @@ py -3.12 -m venv .venv
 If your `py` launcher points to a newer Python version, that is fine as long as
 it is Python 3.12 or newer.
 
-## Running the Desktop App
+## Running the desktop app
 
 Start the GUI:
 
@@ -103,7 +103,7 @@ launcher:
 launcher options start `app.py` through `.venv\Scripts\pythonw.exe`, so they use
 the same installed virtual environment and avoid a visible console window.
 
-## GUI Controls
+## GUI controls
 
 - `Select file(s)`: shown in Convert Once mode; choose one or more `.msg`
   files, or drag `.msg` files onto the field.
@@ -132,7 +132,7 @@ the same installed virtual environment and avoid a visible console window.
   `Settings`; disabled by default to avoid native shell popup issues on some
   managed Windows environments.
 
-## Command Line Usage
+## Command line usage
 
 Launch the GUI:
 
@@ -176,7 +176,7 @@ Start the GUI minimised and begin watching immediately:
 .\.venv\Scripts\python.exe app.py --gui --start-minimized --watch-on-launch
 ```
 
-## Output Structure
+## Output structure
 
 If the input tree is:
 
@@ -228,7 +228,7 @@ are ignored. Embedded email attachments are converted to linked Markdown files
 in the same bundle folder, and visible attachments inside those embedded emails
 are extracted into that same folder.
 
-## Watch Folder Mode
+## Watch folder mode
 
 Watch mode uses `watchdog` to detect `.msg` files created or moved into the
 configured input folder. It ignores temporary files, waits for file size to
@@ -249,7 +249,7 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 It uses `pythonw.exe` when available so the watcher starts without opening a
 console window.
 
-## Configuration And Logs
+## Configuration and logs
 
 User settings are stored locally in `config.json`. The file records the input
 folder, output folder, window geometry, selected mode, checkbox choices,
@@ -262,7 +262,7 @@ folder events and batch summary totals.
 
 Both `config.json` and `logs/` are ignored by Git.
 
-## Rebuilding The Launcher
+## Rebuilding the launcher
 
 The optional `MSG to Markdown.exe` launcher is generated from
 `LaunchMsgToMarkdown.cs`:
@@ -275,7 +275,7 @@ The launcher is not required to run the app. It simply starts `app.py` with
 `pythonw.exe` so the GUI can open without a console window. Generated `.exe`
 files are ignored by Git.
 
-## Extending The Parser
+## Extending the parser
 
 MarkItDown is isolated in `MarkItDownEmailBackend` inside `converter.py`.
 Replacing it with another `.msg` parser, such as `extract-msg`, should only
