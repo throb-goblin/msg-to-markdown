@@ -24,8 +24,8 @@ output_folder/
 *.ost
 *.pst
 *_attachments/
-README_index.md
 main_email.md
+manifest.json
 
 # Extracted or converted attachment/document data
 *.pdf

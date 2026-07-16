@@ -22,7 +22,7 @@ folder continuously for new email archives.
   and the reply thread.
 - Remove Outlook safelink wrappers while keeping the readable target URL.
 - For emails with visible attachments, create an AI-friendly bundle folder with
-  `README_index.md`, `main_email.md`, converted embedded emails and native
+  `manifest.json`, `main_email.md`, converted embedded emails and native
   attachment files together.
 - Keep PDFs, DOCX, XLSX, CSV and other native attachments as native files.
 - Convert embedded `.msg` attachments to Markdown and extract their visible
@@ -198,7 +198,7 @@ output_folder/
     `-- Emails/
         |-- Email 1.md
         `-- 094633_14-07-2026 - Email 2/
-            |-- README_index.md
+            |-- manifest.json
             |-- main_email.md
             |-- embedded_email.md
             |-- advice.pdf
@@ -221,12 +221,12 @@ title: "Optional subject when MarkItDown exposes one"
 ---
 ```
 
-For bundle folders, `README_index.md` gives a recommended read order and full
-file inventory. `main_email.md` lists visible attachments under
-`## Attachments`. Hidden inline signature images are ignored. Embedded email
-attachments are converted to linked Markdown files in the same bundle folder,
-and visible attachments inside those embedded emails are extracted into that
-same folder.
+For bundle folders, `manifest.json` records the root email, generated files,
+attachment relationships, source hashes and extraction warnings. `main_email.md`
+lists visible attachments under `## Attachments`. Hidden inline signature images
+are ignored. Embedded email attachments are converted to linked Markdown files
+in the same bundle folder, and visible attachments inside those embedded emails
+are extracted into that same folder.
 
 ## Watch Folder Mode
 

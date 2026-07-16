@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -46,6 +47,12 @@ EMAIL_REPLY_INTRO_RE = re.compile(r"^\s*On .+ wrote:\s*$", re.IGNORECASE)
 EMAIL_SIGNOFF_RE = re.compile(
     r"^\s*(?:kind regards|best regards|warm regards|regards|many thanks|"
     r"thanks|thank you|cheers|yours sincerely|sincerely)[,!.\s]*$",
+    re.IGNORECASE,
+)
+POST_SIGNOFF_SUBSTANTIVE_START_RE = re.compile(
+    r"^(?:please|also|the|this|that|it|we|i|can|could|would|should|"
+    r"there|earlier|attached|as|if|let|lets|let's|note|just|"
+    r"following|further|additional)\b",
     re.IGNORECASE,
 )
 EMAIL_ADDRESS_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+", re.IGNORECASE)
@@ -147,6 +154,8 @@ class AttachmentInfo:
     saved_path: Path | None = None
     embedded_message: bool = False
     skipped_reason: str | None = None
+    source_index: int | None = None
+    nested_attachments: list["AttachmentInfo"] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -442,14 +451,24 @@ class MsgToMarkdownConverter:
                 temp_path.write_text(content, encoding="utf-8", newline="\n")
                 temp_path.replace(output_path)
                 if output_paths.bundle_folder is not None:
-                    index_content = build_bundle_index(
+                    manifest = build_bundle_manifest(
                         source_path=source_path,
                         main_markdown=output_path,
                         attachments=attachments,
                         metadata=metadata,
                     )
-                    index_path = output_paths.bundle_folder / "README_index.md"
-                    index_path.write_text(index_content, encoding="utf-8", newline="\n")
+                    manifest_path = output_paths.bundle_folder / "manifest.json"
+                    manifest_path.write_text(
+                        json.dumps(
+                            manifest,
+                            indent=2,
+                            sort_keys=True,
+                            ensure_ascii=False,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                        newline="\n",
+                    )
                 elapsed = time.monotonic() - started
                 self._logger.info("Succeeded: %s -> %s", source_path, output_path)
                 return ConversionResult(
@@ -906,6 +925,7 @@ def extract_msg_attachments_from_ole(
             info = AttachmentInfo(
                 name=f"attachment-{index}",
                 skipped_reason="could not extract",
+                source_index=index,
             )
         if info is not None:
             attachments.append(info)
@@ -971,7 +991,11 @@ def attachment_info_from_storage(
         )
 
     if not ole.exists(data_stream):  # type: ignore[attr-defined]
-        return AttachmentInfo(name=name, skipped_reason="not extracted")
+        return AttachmentInfo(
+            name=name,
+            skipped_reason="not extracted",
+            source_index=index,
+        )
 
     data = ole.openstream(data_stream).read()  # type: ignore[attr-defined]
     attachment_dir.mkdir(parents=True, exist_ok=True)
@@ -979,11 +1003,16 @@ def attachment_info_from_storage(
     try:
         saved_path.write_bytes(data)
     except OSError as exc:
-        return AttachmentInfo(name=name, skipped_reason=f"could not extract: {exc}")
+        return AttachmentInfo(
+            name=name,
+            skipped_reason=f"could not extract: {exc}",
+            source_index=index,
+        )
     return AttachmentInfo(
         name=saved_path.name,
         size_bytes=len(data),
         saved_path=saved_path,
+        source_index=index,
     )
 
 
@@ -1003,6 +1032,7 @@ def convert_embedded_msg_attachment(
             name=attachment_name,
             embedded_message=True,
             skipped_reason="embedded email depth limit",
+            source_index=index,
         )
 
     metadata = extract_msg_metadata_from_ole(ole, embedded_root)
@@ -1034,11 +1064,15 @@ def convert_embedded_msg_attachment(
             name=attachment_name,
             embedded_message=True,
             skipped_reason=f"could not convert embedded email: {exc}",
+            source_index=index,
+            nested_attachments=nested_attachments,
         )
     return AttachmentInfo(
         name=attachment_name,
         saved_path=output_path,
         embedded_message=True,
+        source_index=index,
+        nested_attachments=nested_attachments,
     )
 
 
@@ -1184,14 +1218,16 @@ def clean_email_markdown(markdown: str) -> str:
             end_index = find_signature_end(lines, index + 1)
             segment = lines[index + 1 : end_index]
             has_reply_after = end_index < len(lines)
-            cleaned.extend(preserved_signature_identity(segment))
-            trim_trailing_blank_lines(cleaned)
-            if has_reply_after:
-                cleaned.append("")
-                index = skip_blank_lines(lines, end_index)
-            else:
-                index = end_index
-            continue
+            replacement = conservative_signature_replacement(segment)
+            if replacement is not None:
+                cleaned.extend(replacement)
+                trim_trailing_blank_lines(cleaned)
+                if has_reply_after:
+                    cleaned.append("")
+                    index = skip_blank_lines(lines, end_index)
+                else:
+                    index = end_index
+                continue
         index += 1
 
     return "\n".join(cleaned).rstrip() + "\n"
@@ -1202,10 +1238,11 @@ def normalise_outlook_safelinks(markdown: str) -> str:
 
     def replacement(match: re.Match[str]) -> str:
         token = match.group(0)
-        if token.startswith("<") and token.endswith(">"):
-            return ""
+        wrapped = token.startswith("<") and token.endswith(">")
         target = decoded_safelink_target(token)
-        return target or ""
+        if not target:
+            return token
+        return f"<{target}>" if wrapped else target
 
     return OUTLOOK_SAFELINK_RE.sub(replacement, markdown)
 
@@ -1259,25 +1296,54 @@ def skip_blank_lines(lines: list[str], start_index: int) -> int:
     return index
 
 
-def preserved_signature_identity(lines: list[str]) -> list[str]:
-    """Keep only sender name and a likely role line after a sign-off."""
+def conservative_signature_replacement(lines: list[str]) -> list[str] | None:
+    """Return a safe replacement for a clear signature block, else preserve it."""
+
+    nonblank = [line.strip() for line in lines if line.strip()]
+    if not nonblank:
+        return None
+
+    first = nonblank[0]
+    if is_signature_contact_or_footer_line(first):
+        if all(is_signature_contact_or_footer_line(line) for line in nonblank):
+            return []
+        return None
+
+    if not is_likely_signature_name_line(first):
+        return None
 
     preserved: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            if preserved:
-                return preserved
-            continue
-        if is_signature_contact_or_footer_line(stripped):
-            return preserved
-        if not preserved:
-            preserved.append(stripped)
-            continue
-        if len(preserved) == 1 and is_role_line(stripped):
-            preserved.append(stripped)
+    preserved.append(first)
+    next_index = 1
+    if next_index < len(nonblank) and is_role_line(nonblank[next_index]):
+        preserved.append(nonblank[next_index])
+        next_index += 1
+
+    remaining = nonblank[next_index:]
+    if not remaining:
         return preserved
-    return preserved
+    if all(is_signature_contact_or_footer_line(line) for line in remaining):
+        return preserved
+    return None
+
+
+def is_likely_signature_name_line(line: str) -> bool:
+    """Return true for conservative sender-name style signature lines."""
+
+    stripped = line.strip()
+    if not stripped or len(stripped) > 120:
+        return False
+    if is_signature_contact_or_footer_line(stripped):
+        return False
+    if POST_SIGNOFF_SUBSTANTIVE_START_RE.match(stripped):
+        return False
+    if stripped.endswith(("?", "!")):
+        return False
+    if stripped.endswith(".") and not re.search(r"\b[A-Z]\.$", stripped):
+        return False
+    if len(stripped.split()) > 14:
+        return False
+    return True
 
 
 def is_signature_contact_or_footer_line(line: str) -> bool:
@@ -1392,115 +1458,199 @@ def build_attachment_markdown_section(
     return "\n".join(lines)
 
 
-def build_bundle_index(
+def build_bundle_manifest(
     source_path: Path,
     main_markdown: Path,
     attachments: list[AttachmentInfo],
     metadata: EmailMetadata,
-) -> str:
-    """Build the AI-friendly bundle index file."""
+) -> dict[str, object]:
+    """Build the lightweight machine-readable bundle manifest."""
 
-    embedded = [item for item in attachments if item.embedded_message]
-    native = [item for item in attachments if not item.embedded_message]
-    lines = [
-        "# Email Bundle Index",
-        "",
-        "This index lists one converted email, any converted embedded emails, and visible attachments.",
-        "",
-        "## Read Order",
-        "",
-        f"1. [main_email.md]({markdown_link_target(main_markdown, main_markdown.parent)})",
+    source_hash = file_sha256(source_path)
+    bundle_id = f"B-{source_hash[:12]}"
+    root_document_id = f"E-{source_hash[:12]}"
+    documents: list[dict[str, object]] = [
+        {
+            "id": root_document_id,
+            "document_type": "email",
+            "relationship": "root",
+            "path": manifest_relative_path(main_markdown, main_markdown.parent),
+            "original_filename": source_path.name,
+            "sha256": file_sha256(main_markdown),
+            "subject": metadata.subject,
+            "received_at": metadata.received_at.isoformat()
+            if metadata.received_at
+            else None,
+            "sent_at": metadata.sent_at.isoformat() if metadata.sent_at else None,
+            "parse_status": "complete",
+        }
     ]
+    relationships: list[dict[str, object]] = []
+    warnings: list[dict[str, object]] = []
+    used_document_ids = {root_document_id}
 
-    order = 2
-    indexed_files = [main_markdown]
-    for attachment in embedded:
-        if attachment.saved_path:
-            lines.append(
-                f"{order}. [{escape_markdown_link_text(attachment.name)}]"
-                f"({markdown_link_target(attachment.saved_path, main_markdown.parent)})"
-                " - converted embedded email"
-            )
-            indexed_files.append(attachment.saved_path)
-            order += 1
-    for attachment in native:
-        if attachment.saved_path:
-            lines.append(
-                f"{order}. [{escape_markdown_link_text(attachment.name)}]"
-                f"({markdown_link_target(attachment.saved_path, main_markdown.parent)})"
-                " - native attachment"
-            )
-            indexed_files.append(attachment.saved_path)
-            order += 1
-
-    extra_files = bundle_extra_files(main_markdown.parent, indexed_files)
-    for file_path in extra_files:
-        description = describe_extra_bundle_file(file_path)
-        lines.append(
-            f"{order}. [{escape_markdown_link_text(file_path.name)}]"
-            f"({markdown_link_target(file_path, main_markdown.parent)})"
-            f" - {description}"
-        )
-        order += 1
-
-    lines.extend(["", "## Source", ""])
-    lines.append(f"- Source MSG: `{source_path.name}`")
-    if metadata.subject:
-        lines.append(f"- Subject: {metadata.subject}")
-    if metadata.received_at:
-        lines.append(f"- Received: {metadata.received_at.isoformat()}")
-    if metadata.sent_at:
-        lines.append(f"- Sent: {metadata.sent_at.isoformat()}")
-
-    lines.extend(["", "## Files", ""])
-    lines.append("- `main_email.md` - parent email body and attachment list")
     for attachment in attachments:
-        if attachment.saved_path:
-            kind = "converted embedded email" if attachment.embedded_message else "native attachment"
-            lines.append(f"- `{attachment.saved_path.name}` - {kind}")
-        else:
-            details = attachment.skipped_reason or "not extracted"
-            lines.append(f"- `{attachment.name}` - {details}")
-    for file_path in extra_files:
-        lines.append(f"- `{file_path.name}` - {describe_extra_bundle_file(file_path)}")
+        add_attachment_to_manifest(
+            attachment=attachment,
+            parent_document_id=root_document_id,
+            bundle_folder=main_markdown.parent,
+            documents=documents,
+            relationships=relationships,
+            warnings=warnings,
+            used_document_ids=used_document_ids,
+        )
 
-    return "\n".join(lines).rstrip() + "\n"
+    return {
+        "schema_version": "0.1",
+        "bundle_id": bundle_id,
+        "root_document_id": root_document_id,
+        "generated_at_utc": utc_now_text(),
+        "source": {
+            "filename": source_path.name,
+            "sha256": source_hash,
+            "subject": metadata.subject,
+            "received_at": metadata.received_at.isoformat()
+            if metadata.received_at
+            else None,
+            "sent_at": metadata.sent_at.isoformat() if metadata.sent_at else None,
+        },
+        "documents": documents,
+        "relationships": relationships,
+        "warnings": warnings,
+    }
 
 
-def bundle_extra_files(bundle_folder: Path, indexed_files: list[Path]) -> list[Path]:
-    """Return bundle files that were extracted by nested embedded emails."""
+def add_attachment_to_manifest(
+    *,
+    attachment: AttachmentInfo,
+    parent_document_id: str,
+    bundle_folder: Path,
+    documents: list[dict[str, object]],
+    relationships: list[dict[str, object]],
+    warnings: list[dict[str, object]],
+    used_document_ids: set[str],
+) -> str:
+    """Add one attachment and any nested children to a manifest graph."""
 
-    indexed = {normalised_path_key(path) for path in indexed_files}
+    relationship_type = "embedded_email" if attachment.embedded_message else "attachment"
+    document_type = "email" if attachment.embedded_message else "attachment"
+    source_index = attachment.source_index
+    if attachment.saved_path:
+        file_hash = file_sha256(attachment.saved_path)
+        prefix = "E" if attachment.embedded_message else "A"
+        document_id = unique_document_id(
+            f"{prefix}-{file_hash[:12]}",
+            used_document_ids,
+            source_index,
+        )
+        document = {
+            "id": document_id,
+            "document_type": document_type,
+            "relationship": relationship_type,
+            "parent_document_id": parent_document_id,
+            "path": manifest_relative_path(attachment.saved_path, bundle_folder),
+            "original_filename": attachment.name,
+            "sha256": file_hash,
+            "size_bytes": attachment.saved_path.stat().st_size,
+            "source_attachment_index": source_index,
+            "extraction_status": "converted"
+            if attachment.embedded_message
+            else "extracted",
+        }
+    else:
+        document_id = unique_document_id(
+            f"A-skipped-{source_index or len(documents) + 1:03d}",
+            used_document_ids,
+            source_index,
+        )
+        document = {
+            "id": document_id,
+            "document_type": document_type,
+            "relationship": relationship_type,
+            "parent_document_id": parent_document_id,
+            "path": None,
+            "original_filename": attachment.name,
+            "sha256": None,
+            "size_bytes": attachment.size_bytes,
+            "source_attachment_index": source_index,
+            "extraction_status": "skipped",
+            "skipped_reason": attachment.skipped_reason or "not extracted",
+        }
+        warnings.append(
+            {
+                "code": "attachment_not_extracted",
+                "message": "An attachment was recorded but no output file was written.",
+                "severity": "warning",
+                "document_id": document_id,
+            }
+        )
+
+    documents.append(document)
+    relationships.append(
+        {
+            "id": f"R-{len(relationships) + 1:03d}",
+            "from_document_id": parent_document_id,
+            "to_document_id": document_id,
+            "relationship_type": relationship_type,
+            "source_attachment_index": source_index,
+        }
+    )
+
+    for nested in attachment.nested_attachments:
+        add_attachment_to_manifest(
+            attachment=nested,
+            parent_document_id=document_id,
+            bundle_folder=bundle_folder,
+            documents=documents,
+            relationships=relationships,
+            warnings=warnings,
+            used_document_ids=used_document_ids,
+        )
+    return document_id
+
+
+def unique_document_id(
+    base_id: str,
+    used_document_ids: set[str],
+    source_index: int | None,
+) -> str:
+    """Return a deterministic unique ID within one manifest."""
+
+    candidate = base_id
+    if candidate in used_document_ids and source_index is not None:
+        candidate = f"{base_id}-{source_index:03d}"
+    suffix = 2
+    while candidate in used_document_ids:
+        candidate = f"{base_id}-{suffix}"
+        suffix += 1
+    used_document_ids.add(candidate)
+    return candidate
+
+
+def file_sha256(path: Path) -> str:
+    """Return the SHA-256 digest for a file."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def utc_now_text() -> str:
+    """Return a compact UTC timestamp for generated metadata."""
+
+    value = datetime.now(timezone.utc).replace(microsecond=0)
+    return value.isoformat().replace("+00:00", "Z")
+
+
+def manifest_relative_path(path: Path, relative_to: Path) -> str:
+    """Return a plain POSIX-style relative path for JSON metadata."""
+
     try:
-        files = [
-            path
-            for path in bundle_folder.iterdir()
-            if path.is_file() and path.name.lower() != "readme_index.md"
-        ]
-    except OSError:
-        return []
-    return [
-        path
-        for path in sorted(files, key=lambda item: item.name.lower())
-        if normalised_path_key(path) not in indexed
-    ]
-
-
-def normalised_path_key(path: Path) -> str:
-    """Return a comparable key for paths that may include OneDrive placeholders."""
-
-    try:
-        return str(path.resolve()).casefold()
-    except OSError:
-        return str(path.absolute()).casefold()
-
-
-def describe_extra_bundle_file(path: Path) -> str:
-    """Describe extracted files not represented by the parent MSG attachment list."""
-
-    if path.suffix.lower() == ".md":
-        return "additional Markdown file"
-    return "additional extracted attachment"
+        return path.relative_to(relative_to).as_posix()
+    except ValueError:
+        return path.name
 
 
 def markdown_link_target(path: Path, relative_to: Path) -> str:
